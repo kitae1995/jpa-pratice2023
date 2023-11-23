@@ -1,11 +1,21 @@
 package com.study.jpa.chap05_pratice.service;
 
+import com.study.jpa.chap05_pratice.dto.*;
+import com.study.jpa.chap05_pratice.entity.HashTag;
+import com.study.jpa.chap05_pratice.entity.Post;
 import com.study.jpa.chap05_pratice.repository.HashTagRepository;
 import com.study.jpa.chap05_pratice.repository.PostRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -16,4 +26,111 @@ public class PostService {
     private final PostRepository postRepository;
     private final HashTagRepository hashTagRepository;
 
+    public PostListResponseDTO getPosts(PageDTO dto){
+
+        //pageable 객체 생성
+        Pageable pageable = PageRequest.of(
+                dto.getPage() - 1,
+                dto.getSize(),
+                Sort.by("createDate").descending()
+
+        );
+
+        // 데이터베이스에서 게시물 목록 조회
+        Page<Post> posts = postRepository.findAll(pageable);
+
+        // 게시물 정보만 꺼내기
+        List<Post> postList = posts.getContent();
+
+        // 게시물 정보를 DTO의 형태에 맞게 변환 ( stream을 이용하여 객체마다 일괄 처리 )
+        List<PostDetailResponseDTO> detailList
+                = postList.stream()
+                        .map(post -> new PostDetailResponseDTO(post))
+                        .collect(Collectors.toList());
+
+        // DB에서 조회한 정보를 JSON 형태에 맞는 DTO로 변환 -> PostListResponseDTO
+       return PostListResponseDTO.builder()
+                .count(detailList.size()) // '조회된' 게시물의 개수
+                .pageInfo(new PageResponseDTO(posts)) // 페이지정보가 담긴 객체를 아예 DTO에게 전달
+                .posts(detailList)
+                .build();
+
+
+
+
+    }
+
+    public PostDetailResponseDTO getDetail(Long id) throws Exception {
+
+        Post postEntity = getPost(id);
+
+        return new PostDetailResponseDTO(postEntity); // 아까 메서드 만들어놓음
+
+    }
+
+    // 게시물 상세보기 메서드
+    private Post getPost(Long id) {
+        Post postEntity
+                = postRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException(id + "번 게시물이 없습니다"));
+        return postEntity;
+    }
+
+    public PostDetailResponseDTO insert(PostCreateDTO dto) throws Exception{
+
+        // 게시물 저장 ( 아직 해시태그는 저장되지 않음 )
+        Post saved = postRepository.save(dto.toEntity());
+
+        // 해시태그 저장
+        List<String> hashTags = dto.getHashTags();
+        if(hashTags != null && hashTags.size() > 0){
+            hashTags.forEach(hashTag -> { // 해시태그가 여러개일수 있으니 foreach 반복문
+                HashTag savedTag = hashTagRepository.save(HashTag.builder()
+                        .tagName(hashTag)
+                        .post(saved)
+                        .build()
+                );
+
+                /*
+                    Post Entity는 DB에 save를 진행할 때 HashTag에 대한 내용을 갱신하지 않습니다.
+                    HashTag Entity는 따로 save를 진행합니다. ( 테이블이 각각 나뉘어 있음 )
+                    HashTag는 양방향 맵핑이 되어있는 연관관계의 주인이기 때문에 save를 진행할 떄
+                    post를 전달하므로
+                    DB와 Entity와의 상태가 동일하지만,
+                    Post는 HashTag의 정보가 비어있는 상태입니다.
+                    Post Entity에 연관관계 편의 메서드를 작성하여 HashTag의 내용을 동기화 해야
+                    추후에 진행되는 과정에서 문제가 발생하지 않습니다.
+                    (Post를 화면단으로 return -> hashTag들도 같이 가야 함. -> 직접 갱신 )
+                    (Post를 다시 SELECT 해서 가져온다 ? -> 의미없는 행동. ( insert는 트랜잭션 종료후 진행되니까 )
+                 */
+                saved.addHashTag(savedTag);
+
+            });
+        }
+
+        
+
+        return new PostDetailResponseDTO(saved);
+    }
+
+    public PostDetailResponseDTO modify(PostModifyDTO dto) {
+
+        // 수정 전 데이터를 조회
+        Post postEntity = getPost(dto.getPostNo());
+
+        // 수정 시작
+        postEntity.setTitle(dto.getTitle());
+        postEntity.setContent(dto.getContent());
+
+        // 수정 완료
+        Post modifiedPost = postRepository.save(postEntity);
+
+        return new PostDetailResponseDTO(modifiedPost);
+    }
+
+    public void delete(Long id) throws Exception{
+
+        postRepository.deleteById(id);
+
+    }
 }
